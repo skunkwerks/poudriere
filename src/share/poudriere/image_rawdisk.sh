@@ -74,11 +74,32 @@ zrawdisk_prepare()
 	truncate -s ${IMAGESIZE} ${WRKDIR}/raw.img
 	md=$(/sbin/mdconfig ${WRKDIR}/raw.img)
 	zroot=${IMAGENAME}root
+	gpart create -s GPT ${md}
+	# Set up a UEFI boot partition.  3M is the smallest size for a FAT16
+	# partition.  Loader is <1M.  We could use boot1.efi (which is <100K) but
+	# it just forwards to loader.efi after finding it in the zfs pool and we
+	# have more than enough space to just boot loader directly and we don't
+	# need multiboot support in a VM image.
+	gpart add -t efi -s 3M ${md}
+	newfs_msdos -F 16 -c 1 /dev/${md}p1
+	mkdir ${WRKDIR}/efi
+	mount -t msdosfs /dev/${md}p1 ${WRKDIR}/efi
+	mkdir -p ${WRKDIR}/efi/EFI/BOOT
+	cp /boot/loader.efi ${WRKDIR}/efi/EFI/BOOT/BOOTX64.efi
+	umount ${WRKDIR}/efi
+	rmdir ${WRKDIR}/efi
+	# Create an MBR boot partition and install the bootcode.
+	gpart add -t freebsd-boot -s 545K -l zfs-boot-disk ${md}
+	gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 2 ${md}
+	# Create the partition to hold the ZFS filesystem.  ZFS boot requires a
+	# partition, not a raw disk.
+	gpart add -t freebsd-zfs -a 1M -l zfs-boot-disk ${md}
+	# Create a pool called zroot, with the temporary name derived from the image.
 	zpool create \
 		-O mountpoint=none \
 		-O compression=lz4 \
 		-O atime=off \
-		-R ${WRKDIR}/world ${zroot} /dev/${md}
+		-R ${WRKDIR}/world -t ${zroot} zroot /dev/${md}p3
 	zfs create -o mountpoint=none ${zroot}/ROOT
 	zfs create -o mountpoint=/ ${zroot}/ROOT/default
 	zfs create -o mountpoint=/var ${zroot}/var
@@ -113,7 +134,7 @@ zrawdisk_build()
 
 	cat >> ${WRKDIR}/world/boot/loader.conf <<-EOF
 	zfs_load="YES"
-	vfs.root.mountfrom="zfs:${zroot}/ROOT/default"
+	vfs.root.mountfrom="zfs:zroot/ROOT/default"
 	EOF
 	cat >> ${WRKDIR}/world/etc/rc.conf <<-EOF
 	zfs_enable="YES"
@@ -129,10 +150,9 @@ zrawdisk_generate()
 	zfs set readonly=on ${zroot}/var/empty
 	zpool set bootfs=${zroot}/ROOT/default ${zroot}
 	zpool set autoexpand=on ${zroot}
+	zpool list ${zroot}
 	zpool export ${zroot}
 	zroot=
-	dd if=${mnt}/boot/zfsboot of=/dev/${md} count=1
-	dd if=${mnt}/boot/zfsboot of=/dev/${md} iseek=1 oseek=1024
 	/sbin/mdconfig -d -u ${md#md}
 	md=
 	mv ${WRKDIR}/raw.img "${OUTPUTDIR}/${FINALIMAGE}"
