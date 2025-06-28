@@ -228,6 +228,8 @@ update_pkgbase() {
 	local make_jobs
 	local destdir="${JAILMNT}"
 
+	setup_build_env
+
 	if [ ${JAIL_OSVERSION} -gt 1100086 ]; then
 		make_jobs="${MAKE_JOBS}"
 	fi
@@ -433,6 +435,8 @@ installworld() {
 build_pkgbase() {
 	local make_jobs
 	local destdir="${JAILMNT}"
+
+	setup_build_env
 
 	if [ ${JAIL_OSVERSION} -gt 1100086 ]; then
 		make_jobs="${MAKE_JOBS}"
